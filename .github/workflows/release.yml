@@ -1,0 +1,98 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version'
+        required: true
+
+env:
+  JAVA_VERSION: '11'
+  JAVA_DISTRO: 'zulu'
+
+jobs:
+  precheck:
+    name: Precheck
+    runs-on: ubuntu-latest
+    outputs:
+      VERSION: ${{ steps.vars.outputs.VERSION }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRO }}
+          cache: maven
+
+      - name: Version
+        id: vars
+        shell: bash
+        run: |
+          VERSION=${{ github.event.inputs.version }}
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          ./mvnw -ntp -B versions:set versions:commit -DnewVersion=$VERSION
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "GitHub Action"
+          git commit -a -m "Releasing version $VERSION"
+          git push origin main
+
+  release:
+    needs: [ precheck ]
+    runs-on: ubuntu-latest
+    outputs:
+      HASHES: ${{ steps.slsa.outputs.HASHES }}
+      TAGNAME: ${{ steps.slsa.outputs.TAGNAME }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRO }}
+          cache: maven
+
+      - name: Build
+        run: ./mvnw -ntp -B --file pom.xml verify
+          
+      - name: Release
+        uses: jreleaser/release-action@v2
+        with:
+          version: early-access
+          arguments: full-release
+        env:
+          JRELEASER_PROJECT_VERSION: ${{ needs.precheck.outputs.VERSION }}
+          JRELEASER_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: JReleaser output
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: jreleaser-release
+          path: |
+            out/jreleaser/trace.log
+            out/jreleaser/output.properties
+      - name: SLSA
+        shell: bash
+        id: slsa
+        run: |
+          echo "HASHES=$(cat out/jreleaser/checksums/checksums_sha256.txt | base64 -w0)" >> "$GITHUB_OUTPUT"
+          echo "TAGNAME=$(grep tagName out/jreleaser/output.properties | awk -F'=' '{print $2}')" >> "$GITHUB_OUTPUT"
+
+  provenance:
+    needs: [ precheck, release ]
+    name: Generate provenance
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v1.5.0
+    with:
+      base64-subjects: ${{ needs.release.outputs.HASHES }}
+      upload-assets: true
+      upload-tag-name: ${{ needs.release.outputs.TAGNAME }}
+      provenance-name: app-${{ needs.precheck.outputs.VERSION }}.intoto.jsonl

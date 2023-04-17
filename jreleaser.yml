@@ -15,17 +15,12 @@ project:
 release:
   github:
     overwrite: true
-    sign: true
     discussionCategoryName: Announcements
     changelog:
       formatted: ALWAYS
       preset: conventional-commits
       contributors:
         format: '- {{contributorName}}{{#contributorUsernameAsLink}} ({{.}}){{/contributorUsernameAsLink}}'
-
-signing:
-  active: always
-  armored: true
 
 distributions:
   app:
